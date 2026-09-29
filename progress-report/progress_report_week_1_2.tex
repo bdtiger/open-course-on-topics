@@ -1,0 +1,175 @@
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[margin=1.7cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{mathptmx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\titlespacing*{\section}{0pt}{7pt}{3pt}
+\titleformat*{\section}{\normalsize\bfseries\color{navy}}
+\usepackage[colorlinks=true,linkcolor=black,urlcolor=blue!60!black]{hyperref}
+
+% ---------- Report information (edit here) ----------
+\newcommand{\myname}{Arnab Kumar Ghosh}
+\newcommand{\reporttitle}{Progress Report}
+\newcommand{\projecttitle}{Discrete State-Space Models and Expectation-Maximization for Cell-State Trajectories}
+\newcommand{\supervisor}{Prashant Singh}
+\newcommand{\period}{Weeks 1--2}
+\newcommand{\reportdate}{\today}
+% ----------------------------------------------------
+
+\definecolor{navy}{RGB}{31,56,100}
+\setlist{nosep, leftmargin=1.4em}
+\setlength{\parskip}{2pt}
+\setlength{\parindent}{0pt}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\small Progress report -- \period}
+\cfoot{\small\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+
+\newcommand{\sub}[1]{\vspace{1pt}\textbf{\textcolor{gray!80!black}{#1}}\par}
+
+\begin{document}
+
+% ---------- Title block ----------
+\begin{center}
+  {\Large\bfseries\textcolor{navy}{\reporttitle}}\\[2pt]
+  {\projecttitle}\\[3pt]
+  {\small \myname\ \textperiodcentered\ Supervisor: \supervisor\ \textperiodcentered\ MSc Computer Science, Uppsala University \textperiodcentered\ \period\ \textperiodcentered\ \reportdate}
+\end{center}
+\vspace{-2pt}
+\hrule
+\vspace{4pt}
+
+% ---------- 0. Overview ----------
+\section*{Overview}
+
+The goal of the project is to model how macrophages reprogram into mural-like cells during tissue healing, using a Hidden Markov Model (HMM) fitted with the EM algorithm (Baum--Welch) on single-cell RNA-seq data.
+
+During the first two weeks I followed the reading guide and focused on the mathematical foundations. Progress against the suggested plan:
+
+\begin{itemize}
+  \item Probability basics, Markov chains, likelihood and MLE: \textbf{done}.
+  \item Hidden Markov Model (Rabiner, Sections II--III): \textbf{done}. The three basic problems still need more work.
+  \item Hidden variables and the EM idea: \textbf{started}.
+  \item Bilmes (1998) and toy implementation of forward--backward / Baum--Welch: \textbf{not yet}.
+\end{itemize}
+
+According to the reading guide I am about one week behind. The rest of this report summarises what I understand so far and how each part connects to the project.
+
+% ---------- 1 ----------
+\section{Probability basics and Bayes' theorem}
+
+\sub{What I learned}
+Conditional probability $P(A \mid B)$ is the probability of $A$ once $B$ is known. Two events are independent if knowing one tells nothing about the other. Bayes' theorem turns $P(B \mid A)$ into $P(A \mid B)$:
+\[
+P(A \mid B) = \frac{P(B \mid A)\,P(A)}{P(B)}.
+\]
+
+\sub{In the project}
+The model gives $P(\text{gene expression} \mid \text{cell state})$. The question I want to answer is the reverse, $P(\text{cell state} \mid \text{gene expression})$:
+\[
+P(\text{cell state} \mid \text{gene expression}) = \frac{P(\text{gene expression} \mid \text{cell state})\,P(\text{cell state})}{P(\text{gene expression})}.
+\]
+Bayes' theorem makes this reversal possible, and the forward--backward algorithm is Bayes' theorem applied over a whole sequence.
+
+% ---------- 2 ----------
+\section{Markov chains and the transition matrix}
+
+\sub{What I learned}
+The Markov property: the next state depends only on the current state, not on the whole history,
+\[
+P(s_{t+1} \mid s_t, s_{t-1}, \dots, s_1) = P(s_{t+1} \mid s_t).
+\]
+A Markov chain is a sequence of states following this rule. The transition matrix $A$ has one row per current state and one column per next state, $A[i,j] = P(s_{t+1}=j \mid s_t=i)$, and each row sums to 1. Multiplying a state distribution by $A$ gives the distribution one step later.
+
+\sub{In the project}
+The cell states (Macrophage, Transitional, Mural-like) form the Markov chain. $A[i,j]$ is the probability that a cell in state $i$ is in state $j$ at the next time point. The Markov assumption means a cell's next step depends only on its current state, not on how it got there. The learned $A$ is the main result of the project: it shows the reprogramming path, e.g.\ Macrophage $\to$ Transitional $\to$ Mural-like, and how fast it happens.
+
+% ---------- 3 ----------
+\section{Likelihood and maximum likelihood}
+
+\sub{What I learned}
+The likelihood $L(\theta) = P(\text{data} \mid \theta)$ is the probability of the observed data under a chosen parameter value $\theta$, read as a function of $\theta$ while the data stays fixed. Maximum likelihood estimation picks the $\theta$ that gives the observed data the highest probability. It is the same formula as the probability, only read the other way around.
+
+\sub{In the project}
+The parameters are $\theta = (\pi, A, B)$, where $B$ contains the Gaussian emission parameters (mean and variance of gene expression per state). The likelihood $P(O \mid \theta)$ says how well these parameters explain the observed cell data. Baum--Welch is an algorithm that increases this likelihood step by step.
+
+% ---------- 4 ----------
+\section{Hidden variables and the EM idea}
+
+\sub{What I learned}
+A hidden variable is a variable that affects the data but is never observed. With hidden variables, maximum likelihood cannot be solved directly. EM handles this with two repeated steps:
+\begin{itemize}
+  \item \textbf{E-step:} using the current parameters, estimate the hidden variables as probabilities.
+  \item \textbf{M-step:} using these estimates, re-estimate the parameters as if the hidden variables were known.
+\end{itemize}
+Each round increases (or keeps) the likelihood.
+
+\sub{In the project}
+The hidden variable is the cell state of each cell; only the gene expression is observed. The E-step estimates, for each cell, the probability of being in each state ($\gamma_t(i)$) and the probability of each transition ($\xi_t(i,j)$). The M-step turns these into new values for $\pi$, $A$ and the Gaussians.
+
+% ---------- 5 ----------
+\section{The Hidden Markov Model (Rabiner, Sections II--III)}
+
+\sub{What I learned}
+An HMM is a Markov chain over hidden states $s_1 \dots s_T$, plus an observation $o_t$ at each time step that depends only on the current state. It is defined by $\lambda = (\pi, A, B)$. The probability of one full path is
+\[
+P(s_1 \dots s_T,\; o_1 \dots o_T \mid \lambda) = \pi(s_1)\, B[s_1, o_1] \prod_{t=2}^{T} A[s_{t-1}, s_t]\, B[s_t, o_t].
+\]
+Rabiner's three basic problems:
+\begin{enumerate}
+  \item \textbf{Evaluation:} compute $P(O \mid \lambda)$ by summing over all state paths. The forward algorithm does this efficiently with a table $\alpha_t(i)$ over states and time, instead of listing every path.
+  \item \textbf{Decoding:} find the single most likely state path (Viterbi). Same table idea, but taking the maximum instead of the sum.
+  \item \textbf{Learning:} find $\pi, A, B$ from observations alone (Baum--Welch). This is EM for HMMs: the forward table $\alpha$ and backward table $\beta$ together give $\gamma$ and $\xi$ (E-step), which re-estimate the parameters (M-step).
+\end{enumerate}
+
+\sub{In the project}
+The mapping between the HMM and the project:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.1}\small
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.0cm} >{\raggedright\arraybackslash}p{4.8cm} >{\raggedright\arraybackslash}p{8.4cm}@{}}
+\toprule
+\textbf{HMM element} & \textbf{In Rabiner} & \textbf{In the project} \\
+\midrule
+Hidden state $s_t$ & State of the system at time $t$ (not observed) & Cell state: Macrophage, Transitional, or Mural-like \\
+$N$ & Number of states & $N = 3$ \\
+Observation $o_t$ & What is measured at time $t$ & Gene-expression profile of a cell (a vector of expression values) \\
+$\pi$ & Probability of the first state & Which state a cell starts in (mostly Macrophage after injury) \\
+$A$ (transition matrix) & $P(s_{t+1}=j \mid s_t=i)$ & How cells reprogram, e.g.\ $P(\text{Macrophage}\to\text{Transitional})$. The main result of the project \\
+$B$ (emission model) & $P(o_t \mid s_t)$ & A Gaussian over gene expression for each state, since expression values are continuous \\
+Observation sequence $O$ & $o_1 \dots o_T$ in time order & Ordered cell observations across time points (how to build this ordering is my open question) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Problem 3 is the core of the project: learning $A$ from the data. Problem 1 gives the likelihood used to check that training is improving. Problem 2 could be used later to label each cell with its most likely state. I understand what the three problems are and how they relate, but I still have to go through their solutions in Rabiner in detail.
+
+% ---------- 6 ----------
+\section{What is still unclear to me}
+
+\begin{itemize}
+  \item The solutions to Rabiner's three problems in full detail (forward, Viterbi, Baum--Welch), and the exact derivation of the Baum--Welch re-estimation formulas, and the Gaussian-emission version of the M-step (Bilmes). I understand the idea but have not worked through the equations in full yet.
+  \item How to build the observation sequence $O$. scRNA-seq measures each cell only once, so no single cell is followed over time. I am unsure whether the sequence should come from the time points in the dataset, from a pseudotime ordering, or something else.
+  \item Numerical issues in forward--backward (probabilities becoming very small over long sequences) and how they are usually handled.
+\end{itemize}
+
+% ---------- 7 ----------
+\section{Plan for the next two weeks}
+
+\begin{itemize}
+  \item Finish Bilmes (1998): the general EM recipe and the HMM/Gaussian update equations.
+  \item Implement forward--backward and Baum--Welch on a small toy sequence, as suggested in the reading guide.
+  \item Discuss the sequence definition with the supervisor before touching the real data.
+\end{itemize}
+
+\end{document}

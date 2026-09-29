@@ -1,0 +1,25 @@
+# Core scientific stack
+numpy
+pandas
+scipy
+scikit-learn
+matplotlib
+seaborn
+
+# Single-cell analysis
+scanpy
+anndata
+scvelo
+loompy
+louvain
+scanorama
+scrublet
+
+# Genomics / plotting helpers
+pyranges
+matplotlib-venn
+venn
+
+# Jupyter
+jupyter
+ipykernel

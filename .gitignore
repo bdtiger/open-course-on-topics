@@ -1,0 +1,27 @@
+# Ignore everything at the top level; only the listed project folders are tracked.
+# To track a new top-level folder, add a "!/name/" line below.
+/*
+!/.gitignore
+!/README.md
+!/requirements.txt
+!/docs/
+!/project-code/
+!/progress-report/
+!/planning-doc/
+
+# Build and system files inside the tracked folders
+__pycache__/
+*.pyc
+.DS_Store
+~$*
+*.aux
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.bbl
+*.blg
+*.toc
+*.lof
+*.lot
