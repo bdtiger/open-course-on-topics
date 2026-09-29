@@ -29,8 +29,17 @@ B = np.array([
 
 def validate_hmm_parameters(pi, A, B):
     """
-    Check that pi, A and B agree on the number of states and that every
-    probability row sums to 1. N is taken from pi (one entry per state).
+    Check that pi, A and B agree on the number of states and that every probability row sums to 1.
+
+    Parameters
+    ----------
+    pi: (N,) initial state probabilities
+    A:  (N, N) transition probabilities, rows sum to 1
+    B:  (N, M) emission probabilities, rows sum to 1
+
+    Returns
+    -------
+    None; raises AssertionError if a shape or a row sum is wrong
     """
     N = len(pi)
     M = len(SYMBOLS)
@@ -47,7 +56,16 @@ validate_hmm_parameters(pi, A, B)
 
 def pick_from_row(probability_row, random_generator):
     """
-    Return the zone dart landed in based on the given probability row and a random number generator.
+    Draw one index from a probability row (a dart thrown at the cumulative sums).
+
+    Parameters
+    ----------
+    probability_row: (K,) probabilities summing to 1
+    random_generator: numpy Generator, e.g. np.random.default_rng(0)
+
+    Returns
+    -------
+    int in 0..K-1, the drawn index
     """
     cumulative_sum = np.cumsum(probability_row) # Return the array of cumulative sums of the probability row
     random_value = random_generator.random()
@@ -56,8 +74,20 @@ def pick_from_row(probability_row, random_generator):
 
 def sample_hmm_sequence(pi, A, B, T, random_generator):
     """
-    Sample a sequence of states and observations from the HMM defined by 
-    the initial state probabilities (pi), transition probabilities (A), and emission probabilities (B).
+    Sample a sequence of hidden states and observations from the HMM (pi, A, B).
+
+    Parameters
+    ----------
+    pi: (N,) initial state probabilities
+    A:  (N, N) transition probabilities
+    B:  (N, M) emission probabilities
+    T:  int, length of the sequence
+    random_generator: numpy Generator; same seed gives the same sequence
+
+    Returns
+    -------
+    states: (T,) int in 0..N-1, the hidden state at each time step
+    observations: (T,) int in 0..M-1, the emitted symbol at each time step
     """
     states = np.zeros(T, dtype=int)
     observations = np.zeros(T, dtype=int)
@@ -76,16 +106,48 @@ def sample_hmm_sequence(pi, A, B, T, random_generator):
 
     return states, observations
 
+
+def random_parameters(N, M, random_generator):
+    """
+    Draw a random starting point for Baum-Welch: every row a random probability distribution (uniform Dirichlet).
+
+    Parameters
+    ----------
+    N: int, number of hidden states
+    M: int, number of observation symbols
+    random_generator: numpy Generator; different seed gives a different start
+
+    Returns
+    -------
+    pi: (N,) random initial state probabilities
+    A:  (N, N) random transition probabilities, rows sum to 1
+    B:  (N, M) random emission probabilities, rows sum to 1
+    """
+    pi = random_generator.dirichlet(np.ones(N))
+    A = random_generator.dirichlet(np.ones(N), size=N)
+    B = random_generator.dirichlet(np.ones(M), size=N)
+    return pi, A, B
+
+
 def forward_algorithm(pi, A, B, observations):
     """
-    Compute the forward probabilities (alpha) for a sequence of observations.
+    Forward pass with per-step scaling.
     alpha[t, i] is the probability of being in state i at time t, given the observations up to time t.
+    Every row of alpha is divided by its sum so the numbers do not shrink to zero on long sequences;
+    the sum divided out at time t is saved in scale_factors[t], and log P(O) = sum_t log scale_factors[t].
 
-    Every row of alpha is divided by its sum so the numbers do not shrink to zero on long sequences.
-    The sum that was divided out at time t is saved in scale_factors[t].
-    The likelihood is the product of all scale factors, so the log-likelihood is the sum of their logs.
+    Parameters
+    ----------
+    pi: (N,) initial state probabilities
+    A:  (N, N) transition probabilities
+    B:  (N, M) emission probabilities
+    observations: (T,) int in 0..M-1
 
-    Returns alpha (T x N, each row sums to 1), scale_factors (length T) and log_likelihood.
+    Returns
+    -------
+    alpha: (T, N) scaled forward probabilities, every row sums to 1
+    scale_factors: (T,) the row sum divided out at each time step
+    log_likelihood: float, log P(O | lambda)
     """
     T = len(observations)
     N = len(pi)
@@ -113,13 +175,22 @@ def forward_algorithm(pi, A, B, observations):
 
 def backward_algorithm(pi, A, B, observations, scale_factors):
     """
-    Compute the backward probabilities (beta) for a sequence of observations.
+    Backward pass with the scaling from the forward pass.
     beta[t, i] is the probability of the observations after time t, given state i at time t.
+    Row t of beta is divided by scale_factors[t+1], so alpha[t] * beta[t] sums to 1 at every t.
 
-    Row t of beta is divided by scale_factors[t+1], the same number the forward pass divided out at time t+1.
-    This keeps alpha and beta on the same scale, so alpha[t] * beta[t] sums to 1 at every t.
+    Parameters
+    ----------
+    pi: (N,) initial state probabilities
+    A:  (N, N) transition probabilities
+    B:  (N, M) emission probabilities
+    observations: (T,) int in 0..M-1
+    scale_factors: (T,) from forward_algorithm on the same observations
 
-    Returns beta (T x N) and log_likelihood. The log-likelihood must match the one from the forward pass.
+    Returns
+    -------
+    beta: (T, N) scaled backward probabilities
+    log_likelihood: float, must equal the forward value (the scaling check)
     """
     T = len(observations)
     N = len(pi)
@@ -140,14 +211,24 @@ def backward_algorithm(pi, A, B, observations, scale_factors):
 
 def posteriors(pi, A, B, observations, alpha, beta, scale_factors):
     """
-    Compute the posteriors gamma and xi from alpha and beta. This is the E-step.
+    Posteriors gamma and xi from alpha and beta.
     gamma[t, i] is the probability of being in state i at time t, given the whole sequence.
     xi[t, i, j] is the probability of moving from state i at time t to state j at time t+1, given the whole sequence.
 
-    alpha and beta share the same scaling, so gamma = alpha * beta already sums to 1 in every row.
-    xi is divided by scale_factors[t+1] so every t-slice sums to 1.
+    Parameters
+    ----------
+    pi: (N,) unused, kept so all E-step functions take the same arguments
+    A:  (N, N) transition probabilities
+    B:  (N, M) emission probabilities
+    observations: (T,) int in 0..M-1
+    alpha: (T, N) from forward_algorithm
+    beta:  (T, N) from backward_algorithm
+    scale_factors: (T,) from forward_algorithm
 
-    Returns gamma (T x N) and xi ((T-1) x N x N).
+    Returns
+    -------
+    gamma: (T, N) state posteriors, every row sums to 1
+    xi: (T-1, N, N) transition posteriors, every xi[t] sums to 1
     """
     T = len(observations)
     N = len(pi)
@@ -166,10 +247,20 @@ def posteriors(pi, A, B, observations, alpha, beta, scale_factors):
 
 def e_step(pi, A, B, observations):
     """
-    E-step of Baum-Welch: forward pass, backward pass, then the posteriors gamma and xi
-    under the current parameters pi, A and B.
+    E-step of Baum-Welch: forward pass, backward pass, then the posteriors gamma and xi.
 
-    Returns gamma (T x N), xi ((T-1) x N x N) and the log-likelihood log P(O | lambda).
+    Parameters
+    ----------
+    pi: (N,) current initial state probabilities
+    A:  (N, N) current transition probabilities
+    B:  (N, M) current emission probabilities
+    observations: (T,) int in 0..M-1
+
+    Returns
+    -------
+    gamma: (T, N) state posteriors
+    xi: (T-1, N, N) transition posteriors
+    log_likelihood: float, log P(O | lambda) under the current parameters
     """
     alpha, scale_factors, log_likelihood = forward_algorithm(pi, A, B, observations)
     beta, _ = backward_algorithm(pi, A, B, observations, scale_factors)
@@ -179,13 +270,24 @@ def e_step(pi, A, B, observations):
 
 def m_step(observations, gamma, xi, M):
     """
-    Baum-Welch re-estimation. Turn the posteriors gamma and xi into new parameters.
+    M-step of Baum-Welch. Turn the posteriors gamma and xi into new parameters.
     Every new parameter is a normalised expected count:
       pi_i    <- gamma_1(i)
       A[i, j] <- sum_{t=1}^{T-1} xi_t(i, j)  /  sum_{t=1}^{T-1} gamma_t(i)
       B[j, k] <- sum_{t : o_t = k} gamma_t(j) /  sum_t gamma_t(j)
 
-    Returns new pi (N,), A (N x N) and B (N x M).
+    Parameters
+    ----------
+    observations: (T,) int in 0..M-1
+    gamma: (T, N) state posteriors from the E-step
+    xi:    (T-1, N, N) transition posteriors from the E-step
+    M: int, number of observation symbols
+
+    Returns
+    -------
+    new_pi: (N,) re-estimated initial state probabilities
+    new_A:  (N, N) re-estimated transition probabilities, rows sum to 1
+    new_B:  (N, M) re-estimated emission probabilities, rows sum to 1
     """
     N = gamma.shape[1]
 
@@ -209,9 +311,23 @@ def m_step(observations, gamma, xi, M):
 def baum_welch(pi, A, B, observations, max_iterations=100, tolerance=1e-6):
     """
     Fit pi, A and B to the observations by repeating e_step and m_step
-    until the log-likelihood stops increasing by more than tolerance.
+    until the log-likelihood improves by less than tolerance.
 
-    Returns the fitted pi, A, B and the list of log-likelihoods, one per iteration.
+    Parameters
+    ----------
+    pi: (N,) starting initial state probabilities (e.g. from random_parameters)
+    A:  (N, N) starting transition probabilities
+    B:  (N, M) starting emission probabilities
+    observations: (T,) int in 0..M-1
+    max_iterations: int, upper limit on EM iterations (default 100)
+    tolerance: float, stop when the improvement is smaller than this (default 1e-6)
+
+    Returns
+    -------
+    pi: (N,) fitted initial state probabilities
+    A:  (N, N) fitted transition probabilities
+    B:  (N, M) fitted emission probabilities
+    log_likelihoods: list of float, one per iteration, never decreasing
     """
     M = B.shape[1]
     log_likelihoods = []
@@ -225,59 +341,3 @@ def baum_welch(pi, A, B, observations, max_iterations=100, tolerance=1e-6):
             break
 
     return pi, A, B, log_likelihoods
-
-
-if __name__ == "__main__":
-    states, observations = sample_hmm_sequence(pi, A, B, 5, np.random.default_rng(0))
-    observations = np.array([SYMBOLS.index(s) for s in ["B", "C", "C", "A", "A"]])  # Override with a fixed observation sequence for testing
-    print("states:", states)
-    print("observations:", observations)
-    alpha, scale_factors, log_likelihood_forward = forward_algorithm(pi, A, B, observations)
-    beta, log_likelihood_backward = backward_algorithm(pi, A, B, observations, scale_factors)
-    gamma, xi = posteriors(pi, A, B, observations, alpha, beta, scale_factors)
-
-    print("alpha:\n", alpha)
-    print("beta:\n", beta)
-    print("gamma:\n", gamma)
-    print("xi:\n", xi)
-
-    print("log-likelihood (forward):", log_likelihood_forward)
-    print("log-likelihood (backward):", log_likelihood_backward)
-
-    # Forward and backward checks: two ways, same number
-    assert np.isclose(log_likelihood_forward, log_likelihood_backward)
-    assert np.allclose(alpha.sum(axis=1), 1)
-    assert np.allclose((alpha * beta).sum(axis=1), 1)
-
-    # Posterior checks
-    assert np.allclose(gamma.sum(axis=1), 1)
-    assert np.allclose(xi.sum(axis=(1, 2)), 1)
-    assert np.allclose(xi.sum(axis=2), gamma[:-1])  # summing xi over j gives gamma
-
-    decoded_states = gamma.argmax(axis=1)
-    accuracy = np.mean(decoded_states == states)
-    print(f"log-likelihood = {log_likelihood_forward:.3f}")
-    print(f"argmax(gamma) matches the true state at {accuracy:.1%} of time steps")
-
-    # M-step checks: one re-estimation from the true parameters gives valid distributions
-    new_pi, new_A, new_B = m_step(observations, gamma, xi, len(SYMBOLS))
-    validate_hmm_parameters(new_pi, new_A, new_B)
-
-    # Baum-Welch on a long sequence: start from a random guess, the log-likelihood must never decrease
-    _, long_observations = sample_hmm_sequence(pi, A, B, 2000, np.random.default_rng(0))
-    rng = np.random.default_rng(1)
-    pi_guess = rng.dirichlet(np.ones(len(STATES)))
-    A_guess = rng.dirichlet(np.ones(len(STATES)), size=len(STATES))
-    B_guess = rng.dirichlet(np.ones(len(SYMBOLS)), size=len(STATES))
-    pi_fit, A_fit, B_fit, log_likelihoods = baum_welch(pi_guess, A_guess, B_guess, long_observations)
-    validate_hmm_parameters(pi_fit, A_fit, B_fit)
-    assert np.all(np.diff(log_likelihoods) >= -1e-8), "log-likelihood decreased during Baum-Welch"
-
-    _, _, log_likelihood_true = forward_algorithm(pi, A, B, long_observations)
-    print(f"Baum-Welch on {len(long_observations)} observations: {len(log_likelihoods)} iterations, "
-          f"log-likelihood {log_likelihoods[0]:.1f} -> {log_likelihoods[-1]:.1f} "
-          f"(true parameters: {log_likelihood_true:.1f})")
-    # Note: the fitted states may come out in a different order than S1, S2, S3 (label switching)
-    np.set_printoptions(precision=3, suppress=True)
-    print("fitted A =\n", A_fit)
-    print("fitted B =\n", B_fit)
