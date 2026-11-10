@@ -7,7 +7,6 @@
 !/docs/
 !/project-code/
 !/progress-report/
-!/planning-doc/
 
 # Build and system files inside the tracked folders
 __pycache__/

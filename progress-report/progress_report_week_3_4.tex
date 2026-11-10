@@ -216,7 +216,7 @@ This supports the direction agreed with the supervisor. In the population-level 
 
 \begin{itemize}
   \item Sequence definition: scRNA-seq measures each cell only once, so no sequence of individual cells can be built (Section 6). The supervisor's email of 20 September proposes a population-level model instead: one step of $A$ is one week, and the cells on a day are a mixture of the states. I have read the proposal but I do not yet understand how it is written as a likelihood or how it is fitted. Working through it with the supervisor is plan item 2 and my main question for the next meeting.
-  \item The Gaussian-emission M-step (Bilmes): how the $\bar{B}[j,k]$ update above becomes updates for $\mu_j$ and $U_j$, and how to keep $U_j$ well conditioned when a state has few cells.
+  \item The Gaussian-emission M-step (Bilmes): how the $\bar{B}[j,k]$ update above becomes updates for $\mu_j$(Mean) and $U_j$(Covariance), and how to keep $U_j$ well conditioned when a state has few cells.
   \item Healthy tissue: both ss2 and ss3 contain healthy-tissue cells, but the model starts at ``Macrophage after injury'' and healthy is not a time point after injury. Should these cells be considered at all, and if so, where do they go in the sequence? I will ask at the next meeting.
   \item How many random restarts of Baum--Welch are needed on the real data.
 \end{itemize}
