@@ -1,11 +1,11 @@
 """
-Shared helpers for the project. hmm.py holds the algorithms, experiments.py runs them,
-plots.py draws figures; this file holds what they have in common.
+Shared helpers for the project. hmm.py holds the algorithms, run_experiments.py runs them,
+plot_results.py draws figures; this file holds what they have in common.
 
 Currently: saving and loading experiment results.
 Every experiment saves one JSON file in results/<name>.json. That file is the single source
 of truth: plots and the numbers quoted in the report are made from it, never from a live run.
-To refresh a figure after changing values, rerun experiments.py (rewrites the JSON), then plots.py.
+To refresh a figure after changing values, rerun the experiment in run_experiments.py (rewrites the JSON), then plot_results.py.
 """
 import json
 from pathlib import Path

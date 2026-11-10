@@ -1,38 +1,18 @@
-
+"""
+Population model and its EM algorithm (week 5-6 report). Algorithms only: no data, no constants,
+no prints. The toy parameters are in toy_parameters.py, the starting values in starting_values.py.
+"""
 import numpy as np
 from scipy.optimize import minimize
 from scipy.special import logsumexp, softmax
-from sklearn.cluster import KMeans
 
 # Shape conventions
 #   N = number of hidden states (A is N x N)
 #   d = number of genes      (each cell is a vector of length d)
 #   W = number of weeks      (4: day 0, 7, 14, 21)
 #   pi: (N,)   A: (N, N)   proportions: (W, N), row t is p_t
-#   means: (N, d)   
+#   means: (N, d)
 #   variances: (N, d), the diagonal of U_j
-
-
-NUMBER_OF_STATES = 3  # Number of hidden states
-NUMBER_OF_GENES = 2  # Number of genes
-STATES = ["MA", "T", "MU"]
-NUMBER_OF_WEEKS = 4
-
-pi = np.array([0.90, 0.05, 0.05])  # Initial hidden state proportions (day 0)
-
-A = np.array([
-    [0.80, 0.15, 0.05],  # Transition probabilities from MA (one week)
-    [0.10, 0.60, 0.30],  # Transition probabilities from T
-    [0.02, 0.03, 0.95]   # Transition probabilities from MU
-])
-
-means = np.array([
-    [4.0, 1.0],  # Mean expression of MA
-    [2.5, 2.5],  # Mean expression of T
-    [1.0, 4.0]   # Mean expression of MU
-])
-
-variances = np.ones_like(means)  # Diagonal of U_j, all variances 1
 
 
 def validate_population_parameters(pi, A, means, variances):
@@ -63,9 +43,6 @@ def validate_population_parameters(pi, A, means, variances):
     assert np.all(variances > 0), "Variances must be positive."
 
 
-validate_population_parameters(pi, A, means, variances)
-
-
 def get_proportions(pi, A, number_of_weeks):
     """
     State proportions of the population in each week, p_t = pi A^t.
@@ -87,7 +64,7 @@ def get_proportions(pi, A, number_of_weeks):
     return proportions
 
 
-def sample_cells(pi, A, means, variances, cells_per_week, random_generator):
+def sample_cells(pi, A, means, variances, cells_per_week, number_of_weeks, random_generator):
     """
     Simulate measured cells: in each week, draw each cell's hidden state from p_t, then its
     expression vector from that state's Gaussian. Every cell is measured once; no chain per cell.
@@ -99,6 +76,7 @@ def sample_cells(pi, A, means, variances, cells_per_week, random_generator):
     means:          (N, d) mean expression of each hidden state
     variances:      (N, d) variance of each gene in each hidden state (diagonal of U_j)
     cells_per_week: int, number of cells measured in each week
+    number_of_weeks: W, number of weeks including week 0
     random_generator: numpy Generator; same seed gives the same cells
 
     Returns
@@ -108,11 +86,11 @@ def sample_cells(pi, A, means, variances, cells_per_week, random_generator):
     states: (n,) int in 0..N-1, the true hidden state of each cell (answer key, not seen by the fit)
     """
     number_of_states, number_of_genes = means.shape
-    proportions = get_proportions(pi, A, NUMBER_OF_WEEKS)
+    proportions = get_proportions(pi, A, number_of_weeks)
 
-    weeks = np.repeat(np.arange(NUMBER_OF_WEEKS), cells_per_week)
+    weeks = np.repeat(np.arange(number_of_weeks), cells_per_week)
     states = np.zeros(len(weeks), dtype=int)
-    for t in range(NUMBER_OF_WEEKS):
+    for t in range(number_of_weeks):
         in_week = weeks == t
         states[in_week] = random_generator.choice(number_of_states, size=cells_per_week, p=proportions[t])
 
@@ -154,7 +132,7 @@ def log_gaussian_densities(X, means, variances):
     return log_densities
 
 
-def e_step(X, weeks, pi, A, means, variances):
+def e_step(X, weeks, number_of_weeks, pi, A, means, variances):
     """
     E-step: responsibilities r_cj = P(z_c = j | x_c, t_c) and the log-likelihood of all cells.
 
@@ -177,6 +155,7 @@ def e_step(X, weeks, pi, A, means, variances):
     ----------
     X:         (n, d) expression of each cell
     weeks:     (n,) int in 0..W-1, the week each cell was measured in
+    number_of_weeks: W, number of weeks including week 0
     pi:        (N,) initial hidden state proportions (week 0)
     A:         (N, N) one-week transition probabilities
     means:     (N, d) mean expression of each hidden state
@@ -188,7 +167,7 @@ def e_step(X, weeks, pi, A, means, variances):
     log_likelihood: float, l = sum over cells of log sum_j p_{t_c}[j] N(x_c; mu_j, U_j)
     """
     # Step 1. Prior of each cell = proportions of its own week, p_{t_c} = pi A^{t_c}: (n, N)
-    proportions = get_proportions(pi, A, NUMBER_OF_WEEKS)        # (W, N), row t is p_t
+    proportions = get_proportions(pi, A, number_of_weeks)        # (W, N), row t is p_t
     priors = proportions[weeks]                                   # row c is p_{t_c}
 
     # Step 2. Log of the numerator of r_cj: a_cj = log p_{t_c}[j] + log N(x_c; mu_j, U_j): (n, N)
@@ -255,7 +234,7 @@ def m_step(X, r, variance_floor=1e-3):
     return means, variances
 
 
-def soft_counts(r, weeks):
+def soft_counts(r, weeks, number_of_weeks):
     """
     Soft number of cells in each hidden state in each week (report Section 4):
 
@@ -265,13 +244,14 @@ def soft_counts(r, weeks):
     ----------
     r:     (n, N) responsibilities from the E-step
     weeks: (n,) int in 0..W-1, the week each cell was measured in
+    number_of_weeks: W, number of weeks including week 0
 
     Returns
     -------
     counts: (W, N), row t is n_t; row t sums to the number of cells measured in week t
     """
-    counts = np.zeros((NUMBER_OF_WEEKS, r.shape[1]))
-    for t in range(NUMBER_OF_WEEKS):
+    counts = np.zeros((number_of_weeks, r.shape[1]))
+    for t in range(number_of_weeks):
         counts[t] = np.sum(r[weeks == t], axis=0)
     return counts
 
@@ -342,139 +322,3 @@ def update_pi_A(counts, pi, A, max_iterations=50):
     if negative_Q(result.x) < negative_Q(theta_start):
         return to_pi_A(result.x)
     return pi, A
-
-def householder_start(p0, p1, floor=0.01):
-    """
-    Starting A from a Householder reflection of rough day-0 and day-7 proportions (report Section 5):
-
-        A_start = I - 2 w w^T / (w^T w),   w = p0 - p1
-
-    in five steps (numbered in the code below):
-
-        1. w = p0 - p1                       sums to 0, because p0 and p1 both sum to 1
-        2. reflection = 2 w w^T / (w^T w)    (N, N)
-        3. A_start = I - reflection          every row sums to 1, but entries can be negative
-        4. entries below floor -> floor      no negative entry, and no entry exactly 0
-        5. divide each row by its sum        rows sum to 1 again
-
-    Parameters
-    ----------
-    p0:    (N,) rough state proportions on day 0
-    p1:    (N,) rough state proportions on day 7
-    floor: smallest entry allowed in A_start
-
-    Returns
-    -------
-    A_start: (N, N) starting transition probabilities; rows sum to 1, every entry > 0
-    """
-    # Step 1. Difference of the two proportion vectors
-    w = p0 - p1
-    assert w @ w > 0, "p0 and p1 are equal, so the reflection is undefined; use a random start"
-
-    # Step 2. 2 w w^T / (w^T w): outer product of w with itself, divided by its squared length
-    reflection = 2 * np.outer(w, w) / (w @ w)
-
-    # Step 3. Householder matrix
-    A_start = np.eye(len(w)) - reflection
-
-    # Step 4. Replace negative entries (and anything below the floor) by the floor
-    A_start = np.maximum(A_start, floor)
-
-    # Step 5. Make every row a probability distribution again
-    A_start = A_start / A_start.sum(axis=1, keepdims=True)
-    return A_start
-
-
-def random_start(number_of_states, random_generator):
-    """
-    Random starting pi and A: every row a random probability distribution (uniform Dirichlet),
-    as random_parameters in hmm.py. A Dirichlet draw is never exactly 0.
-
-    Parameters
-    ----------
-    number_of_states: N
-    random_generator: numpy Generator; different seed gives a different start
-
-    Returns
-    -------
-    pi: (N,) random initial state proportions
-    A:  (N, N) random transition probabilities, rows sum to 1
-    """
-    pi = random_generator.dirichlet(np.ones(number_of_states))
-    A = random_generator.dirichlet(np.ones(number_of_states), size=number_of_states)
-    return pi, A
-
-
-def initial_gaussians(X, weeks, number_of_states, random_generator, variance_floor=1e-3):
-    """
-    Starting Gaussians from k-means on all cells (all weeks pooled), plus the fraction of each
-    week's cells in each cluster. Rows 0 and 1 of those fractions are the rough p0, p1 for
-    householder_start.
-
-    in four steps (numbered in the code below):
-
-        1. k-means with N clusters on all cells       each cell gets a cluster label 0..N-1
-        2. mu_j = centre of cluster j
-        3. sigma^2_jg = variance of gene g inside cluster j (floored)
-        4. cluster_proportions[t, j] = fraction of week-t cells in cluster j
-
-    The clusters come in arbitrary order; Step 9 (match_states) puts them in the order MA, T, MU.
-
-    Parameters
-    ----------
-    X:                (n, d) expression of each cell
-    weeks:            (n,) int in 0..W-1, the week each cell was measured in
-    number_of_states: N, number of clusters
-    random_generator: numpy Generator; seeds k-means
-    variance_floor:   smallest variance allowed (a cluster can be very tight)
-
-    Returns
-    -------
-    means:               (N, d) cluster centres
-    variances:           (N, d) within-cluster variance of each gene
-    cluster_proportions: (W, N) row t is the fraction of week-t cells in each cluster
-    """
-    number_of_genes = X.shape[1]
-
-    # Step 1. k-means on all cells
-    kmeans = KMeans(n_clusters=number_of_states, n_init=10,
-                    random_state=int(random_generator.integers(1_000_000)))
-    cluster_labels = kmeans.fit_predict(X)   # (n,) cluster of each cell
-
-    # Step 2. Means = cluster centres
-    means = kmeans.cluster_centers_
-
-    # Step 3. Variances = spread of each gene inside each cluster
-    variances = np.zeros((number_of_states, number_of_genes))
-    for j in range(number_of_states):
-        variances[j] = X[cluster_labels == j].var(axis=0)
-    variances = np.maximum(variances, variance_floor)
-
-    # Step 4. Fraction of each week's cells in each cluster
-    cluster_proportions = np.zeros((NUMBER_OF_WEEKS, number_of_states))
-    for t in range(NUMBER_OF_WEEKS):
-        labels_in_week = cluster_labels[weeks == t]
-        cluster_proportions[t] = np.bincount(labels_in_week, minlength=number_of_states) / len(labels_in_week)
-
-    return means, variances, cluster_proportions
-
-
-
-if __name__ == "__main__":
-    # Quick sanity check: proportions sum to 1, sample matches the parameters it was drawn from
-    proportions = get_proportions(pi, A, NUMBER_OF_WEEKS)
-    print("proportions (rows are p_0 .. p_3):\n", proportions)
-
-    cells_per_week = 3
-    X, weeks, states = sample_cells(
-        pi, 
-        A, 
-        means, 
-        variances, 
-        cells_per_week,
-        np.random.default_rng(0)
-    )
-
-    print(f"Sampled {len(X)} cells, {cells_per_week} per week.\n")
-    print(f"size of Weeks:{weeks.shape}\n", weeks)
-    print(f"size of States:{states.shape}\n", states)

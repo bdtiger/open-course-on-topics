@@ -1,10 +1,10 @@
 """
 Experiments on the toy HMM. hmm.py holds the algorithms; this file runs them and saves the results.
 
-One function per experiment. Each saves a JSON file in results/ (see utils.py); plots.py reads
-those files. To refresh a figure after changing values: run this file, then plots.py.
+One function per experiment. Each saves a JSON file in results/ (see utils.py); plot_results.py reads
+those files. To refresh a figure after changing values: run this file, then plot_results.py.
 
-Run:  ../.venv/bin/python experiments.py
+Run:  ../.venv/bin/python run_experiments.py
 """
 import numpy as np
 
