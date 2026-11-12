@@ -1,7 +1,9 @@
 """
-Population model and its EM algorithm (week 5-6 report). Algorithms only: no data, no constants,
+Population model and its EM algorithm. Algorithms only: no data, no constants,
 no prints. The toy parameters are in toy_parameters.py, the starting values in starting_values.py.
 """
+from itertools import permutations
+
 import numpy as np
 from scipy.optimize import minimize
 from scipy.special import logsumexp, softmax
@@ -136,7 +138,7 @@ def e_step(X, weeks, number_of_weeks, pi, A, means, variances):
     """
     E-step: responsibilities r_cj = P(z_c = j | x_c, t_c) and the log-likelihood of all cells.
 
-    For each cell c, measured in week t_c, Bayes' rule with the prior p_{t_c} (report Section 3):
+    For each cell c, measured in week t_c, Bayes' rule with the prior p_{t_c}:
 
         r_cj = p_{t_c}[j] N(x_c; mu_j, U_j) / sum_k p_{t_c}[k] N(x_c; mu_k, U_k)
         l    = sum_c log sum_k p_{t_c}[k] N(x_c; mu_k, U_k)
@@ -187,7 +189,7 @@ def e_step(X, weeks, number_of_weeks, pi, A, means, variances):
 
 def m_step(X, r, variance_floor=1e-3):
     """
-    M-step, part 1: new mean and variance of every hidden state's Gaussian (report Section 4).
+    M-step, part 1: new mean and variance of every hidden state's Gaussian.
     All weeks are pooled, because the Gaussians are shared across weeks.
 
         mu_jg      = sum_c r_cj x_cg / sum_c r_cj
@@ -236,7 +238,7 @@ def m_step(X, r, variance_floor=1e-3):
 
 def soft_counts(r, weeks, number_of_weeks):
     """
-    Soft number of cells in each hidden state in each week (report Section 4):
+    Soft number of cells in each hidden state in each week:
 
         n_t[j] = sum over the cells c of week t of r_cj
 
@@ -258,7 +260,7 @@ def soft_counts(r, weeks, number_of_weeks):
 
 def expected_log_weights(pi, A, counts):
     """
-    The part of the expected log-likelihood that depends on pi and A (report Section 4):
+    The part of the expected log-likelihood that depends on pi and A:
 
         Q(pi, A) = sum_t sum_j n_t[j] log p_t[j],   p_t = pi A^t
 
@@ -276,24 +278,58 @@ def expected_log_weights(pi, A, counts):
     return np.sum(counts * np.log(proportions))
 
 
-def update_pi_A(counts, pi, A, max_iterations=50):
+def negative_q_function(theta, counts):
     """
-    M-step, part 2: new pi and A that raise Q (report Section 4). No closed form, because A
-    appears as A^2 and A^3, so a numerical optimiser searches for them.
+    The function that update_pi_A gives to scipy's minimize: -Q(pi, A) for the pi, A given by the
+    free numbers theta, divided by the number of cells so that the optimiser sees numbers near 1.
+    Q is the EM Q-function (expected complete-data log-likelihood), here only its pi, A part
+    (expected_log_weights). Minimising -Q is the same as maximising Q; scipy can only minimise.
 
-    in four steps (numbered in the code below):
+    theta -> pi, A by a softmax, for pi and for each row of A:
 
-        1. pi, A -> 12 free numbers theta = (log pi, log A)    start from the current pi, A
-        2. theta -> pi, A by a softmax                           any 12 numbers give a valid pi, A
-        3. minimise -Q over theta (L-BFGS-B)
-        4. keep the result only if Q went up                     generalised EM: l never decreases
+        softmax(v)_j = exp(v_j) / sum_k exp(v_k)
+
+    so any N + N^2 numbers give a valid pi and A (non-negative, rows sum to 1).
 
     Parameters
     ----------
-    counts:         (W, N) soft counts n_t[j] from soft_counts
-    pi:             (N,) current initial state proportions
-    A:              (N, N) current transition probabilities
-    max_iterations: int, upper limit on optimiser iterations
+    theta:  (N + N^2,) free numbers: log pi, then the rows of log A one after the other
+    counts: (W, N) soft counts n_t[j] from soft_counts
+
+    Returns
+    -------
+    float, -Q / (number of cells)
+    """
+    N = counts.shape[1]
+    pi = softmax(theta[:N])
+    A = softmax(theta[N:].reshape(N, N), axis=1)
+    return -expected_log_weights(pi, A, counts) / np.sum(counts)
+
+
+def update_pi_A(counts, pi, A, max_iterations=50, probability_floor=1e-10):
+    """
+    M-step, part 2: new pi and A that raise Q. No closed form, because A
+    appears as A^2 and A^3, so a numerical optimiser searches for them.
+
+    in five steps (numbered in the code below):
+
+        1. pi, A -> 12 free numbers theta = (log pi, log A)
+        2. minimise -Q over theta (L-BFGS-B)                   negative_q_function
+        3. theta -> pi, A by a softmax                         any 12 numbers give a valid pi, A
+        4. entries below probability_floor -> floor, then rows sum to 1 again
+        5. keep the result only if Q went up                   generalised EM: l never decreases
+
+    Step 4 is needed only because of rounding: a softmax is never 0 on paper, but exp(-800) rounds
+    to exactly 0 in floating point when an entry of A wants to be 0. Then log 0 = -inf in the next
+    Step 1, the optimiser returns nan, Step 5 rejects it, and pi, A stay frozen for the rest of the fit.
+
+    Parameters
+    ----------
+    counts:            (W, N) soft counts n_t[j] from soft_counts
+    pi:                (N,) current initial state proportions
+    A:                 (N, N) current transition probabilities
+    max_iterations:    int, upper limit on optimiser iterations
+    probability_floor: smallest entry allowed in pi and A
 
     Returns
     -------
@@ -302,23 +338,160 @@ def update_pi_A(counts, pi, A, max_iterations=50):
     """
     N = len(pi)
 
-    # Step 1. Free numbers: log pi, then the rows of log A one after the other
+    # Step 1. Starting free numbers from the current pi, A: log pi, then the rows of log A one after the other
     theta_start = np.concatenate([np.log(pi), np.log(A).ravel()])
 
-    # Step 2. Free numbers -> pi, A: softmax(v)_j = exp(v_j) / sum_k exp(v_k), for pi and for each row of A
-    def to_pi_A(theta):
-        return softmax(theta[:N]), softmax(theta[N:].reshape(N, N), axis=1)
-
-    # Step 3. Minimise -Q. Divided by the number of cells, so the optimiser sees numbers near 1.
+    # Step 2. Minimise -Q over theta.
     # jac="3-point": a numerical gradient precise enough for the flat T and MU rows of A
-    def negative_Q(theta):
-        new_pi, new_A = to_pi_A(theta)
-        return -expected_log_weights(new_pi, new_A, counts) / np.sum(counts)
+    result = minimize(
+        negative_q_function,
+        theta_start,
+        args=(counts,),
+        method="L-BFGS-B",
+        jac="3-point",
+        options={"maxiter": max_iterations, "ftol": 1e-15, "gtol": 1e-12},
+    )
 
-    result = minimize(negative_Q, theta_start, method="L-BFGS-B", jac="3-point",
-                      options={"maxiter": max_iterations, "ftol": 1e-15, "gtol": 1e-12})
+    # Step 3. Free numbers -> new pi, A: softmax for pi and for each row of A (as in negative_q_function)
+    new_pi = softmax(result.x[:N])
+    new_A = softmax(result.x[N:].reshape(N, N), axis=1)
 
-    # Step 4. Keep the new pi, A only if Q went up
-    if negative_Q(result.x) < negative_Q(theta_start):
-        return to_pi_A(result.x)
+    # Step 4. No exact 0 in pi or A (as the floor in householder_start), then rows sum to 1 again
+    new_pi = np.maximum(new_pi, probability_floor)
+    new_pi = new_pi / new_pi.sum()
+    new_A = np.maximum(new_A, probability_floor)
+    new_A = new_A / new_A.sum(axis=1, keepdims=True)
+
+    # Step 5. Keep the new pi, A only if Q went up
+    if expected_log_weights(new_pi, new_A, counts) > expected_log_weights(pi, A, counts):
+        return new_pi, new_A
     return pi, A
+
+
+def fit_population_model(
+    X,
+    weeks,
+    number_of_weeks,
+    pi,
+    A,
+    means,
+    variances,
+    max_iterations=500,
+    tolerance=1e-6,
+    variance_floor=1e-3,
+):
+    """
+    Fit pi, A and the Gaussians to the cells by EM: repeat the E-step and
+    the two parts of the M-step until the log-likelihood improves by less than tolerance.
+
+    in seven steps (numbered in the code below):
+
+        0. E-step with the starting values             r, l_0
+        then in each iteration k = 1, 2, ...:
+        1. Gaussians: mu_j, sigma^2_jg from r          m_step (closed form)
+        2. soft counts n_t[j] from r                   soft_counts
+        3. pi, A that raise Q(pi, A)                   update_pi_A (numerical)
+        4. E-step with the new parameters              r, l_k
+        5. check l_k >= l_{k-1}                        EM never lowers l; a drop means a bug
+        6. stop if l_k - l_{k-1} < tolerance
+
+    The E-step comes last in each iteration, so log_likelihoods[0] is the l of the starting values
+    and log_likelihoods[-1] is the l of the parameters that are returned.
+
+    Parameters
+    ----------
+    X:         (n, d) expression of each cell
+    weeks:     (n,) int in 0..W-1, the week each cell was measured in
+    number_of_weeks: W, number of weeks including week 0
+    pi:        (N,) starting initial state proportions
+    A:         (N, N) starting transition probabilities; no entry exactly 0 (log A is taken)
+    means:     (N, d) starting mean expression of each hidden state
+    variances: (N, d) starting variances (diagonal of U_j)
+    max_iterations: int, upper limit on EM iterations
+    tolerance:      float, stop when l improves by less than this
+    variance_floor: smallest variance allowed in the Gaussian update
+
+    Returns
+    -------
+    pi:        (N,) fitted initial state proportions
+    A:         (N, N) fitted transition probabilities
+    means:     (N, d) fitted mean expression of each hidden state
+    variances: (N, d) fitted variances (diagonal of U_j)
+    log_likelihoods: list of float, l of the start, then one per iteration; never decreasing
+    """
+    # Step 0. E-step with the starting values
+    r, log_likelihood = e_step(X, weeks, number_of_weeks, pi, A, means, variances)
+    log_likelihoods = [log_likelihood]
+
+    for _ in range(max_iterations):
+        # Step 1. M-step part 1: new Gaussians, all weeks pooled
+        means, variances = m_step(X, r, variance_floor)
+
+        # Step 2. Soft number of cells in each state in each week: (W, N)
+        counts = soft_counts(r, weeks, number_of_weeks)
+
+        # Step 3. M-step part 2: new pi, A (kept only if Q went up)
+        pi, A = update_pi_A(counts, pi, A)
+
+        # Step 4. E-step with the new parameters
+        r, log_likelihood = e_step(X, weeks, number_of_weeks, pi, A, means, variances)
+        log_likelihoods.append(log_likelihood)
+
+        # Step 5. l never decreases (up to rounding in the sum over cells)
+        improvement = log_likelihoods[-1] - log_likelihoods[-2]
+        assert improvement >= -1e-9 * abs(log_likelihoods[-2]), \
+            f"log-likelihood went down by {-improvement:.3g} in iteration {len(log_likelihoods) - 1}"
+
+        # Step 6. Converged
+        if improvement < tolerance:
+            break
+
+    return pi, A, means, variances, log_likelihoods
+
+
+def match_states(pi, A, means, variances, means_reference):
+    """
+    Put the fitted states in the order of the reference states. EM numbers its states in an
+    arbitrary order (fitted state 0 may be MU), so before comparing a fit with the true parameters,
+    fitted state j must be the one whose mean is closest to reference state j.
+
+    in three steps (numbered in the code below):
+
+        1. for every ordering of the N fitted states (N! of them, 6 for N = 3):
+           distance = sum_j || mu_fit[order[j]] - mu_ref_j ||^2
+        2. keep the ordering with the smallest distance
+        3. reorder: new state j = fitted state order[j]
+              pi_new[j]     = pi[order[j]]
+              A_new[j, k]   = A[order[j], order[k]]      rows and columns, so A_jk stays "from j to k"
+              means_new[j]  = means[order[j]],  variances_new[j] = variances[order[j]]
+
+    Reordering only renames the states: the proportions, r and l of the cells do not change.
+
+    Parameters
+    ----------
+    pi:              (N,) fitted initial state proportions
+    A:               (N, N) fitted transition probabilities
+    means:           (N, d) fitted means
+    variances:       (N, d) fitted variances (diagonal of U_j)
+    means_reference: (N, d) means in the wanted order (toy: the true means)
+
+    Returns
+    -------
+    pi, A, means, variances: the same parameters, with state j matched to reference state j
+    """
+    number_of_states = len(pi)
+    smallest_distance = np.inf
+
+    for order in permutations(range(number_of_states)):
+        order = list(order)
+
+        # Step 1. Total squared distance between the reordered fitted means and the reference means
+        distance = np.sum((means[order] - means_reference) ** 2)
+
+        # Step 2. Keep the closest ordering
+        if distance < smallest_distance:
+            smallest_distance = distance
+            best_order = order
+
+    # Step 3. Reorder pi, A (rows, then columns), means and variances
+    return pi[best_order], A[best_order][:, best_order], means[best_order], variances[best_order]

@@ -3,6 +3,8 @@ Sanity checks for the algorithms in hmm.py (on a short fixed sequence), populati
 starting_values.py (with the toy constants of toy_parameters.py).
 Run after changing anything in these files:  ../.venv/bin/python checks.py
 """
+from itertools import permutations
+
 import numpy as np
 from scipy.stats import multivariate_normal
 
@@ -57,7 +59,7 @@ def run_sanity_checks():
 
 
 def run_population_checks():
-    """Population model (population_model.py): proportions against the hand values of Step 0.1."""
+    """Population model (population_model.py): proportions against hand-computed values."""
     proportions = population_model.get_proportions(toy.pi, toy.A, toy.NUMBER_OF_WEEKS)
     print("proportions (rows are p_0 .. p_3):\n", proportions)
 
@@ -78,9 +80,15 @@ def run_population_checks():
 
     # Simulator: with many cells, the sample matches the parameters it was drawn from
     cells_per_week = 3000
-    X, weeks, states = population_model.sample_cells(toy.pi, toy.A, toy.means, toy.variances,
-                                                     cells_per_week, toy.NUMBER_OF_WEEKS,
-                                                     np.random.default_rng(0))
+    X, weeks, states = population_model.sample_cells(
+        toy.pi,
+        toy.A,
+        toy.means,
+        toy.variances,
+        cells_per_week,
+        toy.NUMBER_OF_WEEKS,
+        np.random.default_rng(0),
+    )
     n = toy.NUMBER_OF_WEEKS * cells_per_week
     assert X.shape == (n, toy.NUMBER_OF_GENES)
     assert weeks.shape == (n,) and states.shape == (n,)
@@ -101,9 +109,15 @@ def run_population_checks():
         assert np.allclose(X_j.var(axis=0), toy.variances[j], atol=0.1)
 
     # Same seed gives the same cells
-    X_again, _, states_again = population_model.sample_cells(toy.pi, toy.A, toy.means, toy.variances,
-                                                             cells_per_week, toy.NUMBER_OF_WEEKS,
-                                                             np.random.default_rng(0))
+    X_again, _, states_again = population_model.sample_cells(
+        toy.pi,
+        toy.A,
+        toy.means,
+        toy.variances,
+        cells_per_week,
+        toy.NUMBER_OF_WEEKS,
+        np.random.default_rng(0),
+    )
     assert np.array_equal(X, X_again) and np.array_equal(states, states_again)
 
     # Gaussian log-densities: the 4 hand-check cells (planning-doc/hand-check/answers.md, Part 2)
@@ -128,20 +142,33 @@ def run_population_checks():
     variances_random = random_generator.uniform(0.2, 3.0, size=(3, 5))
     log_densities_random = population_model.log_gaussian_densities(X_random, means_random, variances_random)
     for j in range(3):
-        log_densities_scipy = multivariate_normal.logpdf(X_random, mean=means_random[j],
-                                                         cov=np.diag(variances_random[j]))
+        log_densities_scipy = multivariate_normal.logpdf(
+            X_random,
+            mean=means_random[j],
+            cov=np.diag(variances_random[j]),
+        )
         assert np.allclose(log_densities_random[:, j], log_densities_scipy)
 
     # A cell far from every mean gives a very negative but finite number, never -inf
-    log_densities_far = population_model.log_gaussian_densities(np.array([[1000.0, -1000.0]]),
-                                                                toy.means, toy.variances)
+    log_densities_far = population_model.log_gaussian_densities(
+        np.array([[1000.0, -1000.0]]),
+        toy.means,
+        toy.variances,
+    )
     print("log-densities of a far cell (1000, -1000):", log_densities_far)
     assert np.all(np.isfinite(log_densities_far))
 
     # E-step: the 4 hand-check cells, one per week (planning-doc/hand-check/answers.md, Part 3)
     weeks_hand = np.array([0, 1, 2, 3])
-    r, log_likelihood = population_model.e_step(X_hand, weeks_hand, toy.NUMBER_OF_WEEKS,
-                                                toy.pi, toy.A, toy.means, toy.variances)
+    r, log_likelihood = population_model.e_step(
+        X_hand,
+        weeks_hand,
+        toy.NUMBER_OF_WEEKS,
+        toy.pi,
+        toy.A,
+        toy.means,
+        toy.variances,
+    )
     r_hand = np.array([   # columns: MA, T, MU
         [0.9743, 0.0256, 0.0001],
         [0.6698, 0.3252, 0.0049],
@@ -156,11 +183,25 @@ def run_population_checks():
     assert np.isclose(log_likelihood, -12.0361, atol=1e-4)
 
     # Log-likelihood equals the direct product of sums, computed without logs (5 sampled cells)
-    X_five, weeks_five, _ = population_model.sample_cells(toy.pi, toy.A, toy.means, toy.variances,
-                                                          2, toy.NUMBER_OF_WEEKS, np.random.default_rng(2))
+    X_five, weeks_five, _ = population_model.sample_cells(
+        toy.pi,
+        toy.A,
+        toy.means,
+        toy.variances,
+        2,
+        toy.NUMBER_OF_WEEKS,
+        np.random.default_rng(2),
+    )
     X_five, weeks_five = X_five[:5], weeks_five[:5]
-    _, log_likelihood_five = population_model.e_step(X_five, weeks_five, toy.NUMBER_OF_WEEKS,
-                                                     toy.pi, toy.A, toy.means, toy.variances)
+    _, log_likelihood_five = population_model.e_step(
+        X_five,
+        weeks_five,
+        toy.NUMBER_OF_WEEKS,
+        toy.pi,
+        toy.A,
+        toy.means,
+        toy.variances,
+    )
     proportions_five = proportions[weeks_five]                                  # prior of each cell, (5, N)
     densities_five = np.exp(population_model.log_gaussian_densities(X_five, toy.means, toy.variances))
     likelihood_direct = np.prod(np.sum(proportions_five * densities_five, axis=1))
@@ -178,8 +219,15 @@ def run_population_checks():
     assert np.allclose(new_variances, variances_hand, atol=1e-4)
 
     # The update raises l: -12.0361 before, -5.0286 after (answers.md, Part 5)
-    _, log_likelihood_after = population_model.e_step(X_hand, weeks_hand, toy.NUMBER_OF_WEEKS,
-                                                      toy.pi, toy.A, new_means, new_variances)
+    _, log_likelihood_after = population_model.e_step(
+        X_hand,
+        weeks_hand,
+        toy.NUMBER_OF_WEEKS,
+        toy.pi,
+        toy.A,
+        new_means,
+        new_variances,
+    )
     print("log-likelihood of the 4 hand-check cells after the Gaussian update:", round(log_likelihood_after, 4))
     assert np.isclose(log_likelihood_after, -5.0286, atol=1e-4)
     assert log_likelihood_after > log_likelihood
@@ -223,20 +271,31 @@ def run_population_checks():
     # distributions, and the full start is valid. Not checked: that each centre is near a true mean.
     # MA is about 2/3 of all cells, so k-means splits MA in two and finds no T centre; EM must fix that.
     kmeans_means, kmeans_variances, cluster_proportions = starting_values.initial_gaussians(
-        X, weeks, len(toy.STATES), toy.NUMBER_OF_WEEKS, np.random.default_rng(0))
+        X,
+        weeks,
+        len(toy.STATES),
+        toy.NUMBER_OF_WEEKS,
+        np.random.default_rng(0),
+    )
     print("k-means centres (arbitrary order):\n", kmeans_means.round(3))
     print("cluster fractions per week (rows week 0..3):\n", cluster_proportions.round(3))
     assert kmeans_means.shape == toy.means.shape
     assert np.allclose(cluster_proportions.sum(axis=1), 1)
     A_kmeans_start = starting_values.householder_start(cluster_proportions[0], cluster_proportions[1])
-    population_model.validate_population_parameters(cluster_proportions[0], A_kmeans_start,
-                                                    kmeans_means, kmeans_variances)
+    population_model.validate_population_parameters(
+        cluster_proportions[0],
+        A_kmeans_start,
+        kmeans_means,
+        kmeans_variances,
+    )
 
     # Soft counts: one hand-check cell per week, so n_t = r of that cell; rows of a sample sum to its cells per week
     counts_hand = population_model.soft_counts(r, weeks_hand, toy.NUMBER_OF_WEEKS)
     assert np.allclose(counts_hand, r)
-    assert np.allclose(population_model.soft_counts(r_one_hot, weeks, toy.NUMBER_OF_WEEKS).sum(axis=1),
-                       cells_per_week)
+    assert np.allclose(
+        population_model.soft_counts(r_one_hot, weeks, toy.NUMBER_OF_WEEKS).sum(axis=1),
+        cells_per_week,
+    )
 
     # Q of the hand-check cells with the true pi, A (answers.md, Part 6): -3.8299, below Q_free = -1.6367
     Q_true = population_model.expected_log_weights(toy.pi, toy.A, counts_hand)
@@ -259,6 +318,67 @@ def run_population_checks():
     print("pi, A from exact proportions (best of 5 random starts):\n", best_pi.round(4), "\n", best_A.round(4))
     assert np.allclose(best_pi, toy.pi, atol=1e-3)
     assert np.allclose(best_A, toy.A, atol=1e-3)
+
+    # Matching states: every shuffled copy of the true parameters is put back in the order MA, T, MU exactly.
+    # A shuffle only renames the states, so l of the hand-check cells is unchanged.
+    for shuffle in permutations(range(len(toy.STATES))):
+        shuffle = list(shuffle)
+        pi_shuffled = toy.pi[shuffle]
+        A_shuffled = toy.A[shuffle][:, shuffle]
+        means_shuffled = toy.means[shuffle]
+        variances_shuffled = toy.variances[shuffle]
+
+        _, log_likelihood_shuffled = population_model.e_step(
+            X_hand,
+            weeks_hand,
+            toy.NUMBER_OF_WEEKS,
+            pi_shuffled,
+            A_shuffled,
+            means_shuffled,
+            variances_shuffled,
+        )
+        assert np.isclose(log_likelihood_shuffled, log_likelihood)
+
+        pi_matched, A_matched, means_matched, variances_matched = population_model.match_states(
+            pi_shuffled,
+            A_shuffled,
+            means_shuffled,
+            variances_shuffled,
+            toy.means,
+        )
+        assert np.array_equal(pi_matched, toy.pi)
+        assert np.array_equal(A_matched, toy.A)
+        assert np.array_equal(means_matched, toy.means)
+        assert np.array_equal(variances_matched, toy.variances)
+    print("match_states puts all 6 shuffled copies of the true parameters back in the order", toy.STATES)
+
+    # Several starts on a small sample (100 cells per week): the Householder fit first, then the random fits;
+    # every fit is valid with no exact 0 in pi or A, and best_index points at the highest final l
+    X_small, weeks_small, _ = population_model.sample_cells(
+        toy.pi,
+        toy.A,
+        toy.means,
+        toy.variances,
+        100,
+        toy.NUMBER_OF_WEEKS,
+        np.random.default_rng(3),
+    )
+    fits, best_index = starting_values.fit_from_several_starts(
+        X_small,
+        weeks_small,
+        len(toy.STATES),
+        toy.NUMBER_OF_WEEKS,
+        2,
+        np.random.default_rng(3),
+    )
+    assert [fit["start"] for fit in fits] == ["householder", "random", "random"]
+    for fit in fits:
+        population_model.validate_population_parameters(fit["pi"], fit["A"], fit["means"], fit["variances"])
+        assert np.all(fit["pi"] > 0) and np.all(fit["A"] > 0)
+    final_log_likelihoods = [fit["log_likelihoods"][-1] for fit in fits]
+    assert best_index == np.argmax(final_log_likelihoods)
+    print("fit_from_several_starts, final l of each start:", np.round(final_log_likelihoods, 2))
+
 
 if __name__ == "__main__":
     run_sanity_checks()

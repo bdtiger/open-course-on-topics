@@ -1,15 +1,18 @@
 """
-Starting values for the population model's EM (report Section 5): a Householder start for A,
-random starts for pi and A, and k-means starting Gaussians. Shared by the toy and the real data.
+Starting values for the population model's EM: a Householder start for A,
+random starts for pi and A, k-means starting Gaussians, and fit_from_several_starts, which fits
+from all of them and keeps the best. Shared by the toy and the real data.
 Shapes follow the conventions at the top of population_model.py.
 """
 import numpy as np
 from sklearn.cluster import KMeans
 
+from population_model import fit_population_model
+
 
 def householder_start(p0, p1, floor=0.01):
     """
-    Starting A from a Householder reflection of rough day-0 and day-7 proportions (report Section 5):
+    Starting A from a Householder reflection of rough day-0 and day-7 proportions:
 
         A_start = I - 2 w w^T / (w^T w),   w = p0 - p1
 
@@ -82,7 +85,7 @@ def initial_gaussians(X, weeks, number_of_states, number_of_weeks, random_genera
         3. sigma^2_jg = variance of gene g inside cluster j (floored)
         4. cluster_proportions[t, j] = fraction of week-t cells in cluster j
 
-    The clusters come in arbitrary order; Step 9 (match_states) puts them in the order MA, T, MU.
+    The clusters come in arbitrary order; match_states (population_model.py) puts them in the order MA, T, MU.
 
     Parameters
     ----------
@@ -102,8 +105,11 @@ def initial_gaussians(X, weeks, number_of_states, number_of_weeks, random_genera
     number_of_genes = X.shape[1]
 
     # Step 1. k-means on all cells
-    kmeans = KMeans(n_clusters=number_of_states, n_init=10,
-                    random_state=int(random_generator.integers(1_000_000)))
+    kmeans = KMeans(
+        n_clusters=number_of_states,
+        n_init=10,
+        random_state=int(random_generator.integers(1_000_000)),
+    )
     cluster_labels = kmeans.fit_predict(X)   # (n,) cluster of each cell
 
     # Step 2. Means = cluster centres
@@ -122,3 +128,93 @@ def initial_gaussians(X, weeks, number_of_states, number_of_weeks, random_genera
         cluster_proportions[t] = np.bincount(labels_in_week, minlength=number_of_states) / len(labels_in_week)
 
     return means, variances, cluster_proportions
+
+
+def fit_from_several_starts(
+    X,
+    weeks,
+    number_of_states,
+    number_of_weeks,
+    number_of_random_starts,
+    random_generator,
+    max_iterations=500,
+):
+    """
+    Fit the population model by EM from several starting values and keep every fit. EM only climbs
+    to the nearest local maximum of l, so the answer is the fit with the highest final l. One start
+    is not enough: on the toy data, the k-means start gets stuck with MA split in two.
+
+    in four steps (numbered in the code below):
+
+        1. Householder start: k-means Gaussians, pi = week-0 cluster fractions,
+           A = householder_start(week-0 cluster fractions, week-1 cluster fractions)
+        2. random starts, each: random pi, A (random_start), means = N random cells,
+           variances = variance of each gene over all cells
+        3. fit_population_model from every start
+        4. best = the fit with the highest final l
+
+    The random starts draw their own means, not the k-means centres: with the same k-means
+    Gaussians every time, the random pi, A all ended in the same few local maxima (toy trial,
+    3000 cells per week).
+
+    Parameters
+    ----------
+    X:                       (n, d) expression of each cell
+    weeks:                   (n,) int in 0..W-1, the week each cell was measured in
+    number_of_states:        N
+    number_of_weeks:         W, number of weeks including week 0
+    number_of_random_starts: int, number of random starts besides the Householder start
+    random_generator:        numpy Generator; seeds k-means and every random start
+    max_iterations:          int, upper limit on EM iterations per start
+
+    Returns
+    -------
+    fits:       list of dicts, one per start (the Householder start first), each with keys
+                "start" ("householder" or "random"), "pi", "A", "means", "variances" (fitted,
+                states in arbitrary order) and "log_likelihoods" (l of the start, then one per iteration)
+    best_index: int, position in fits of the fit with the highest final l
+    """
+    # Step 1. Householder start from k-means on all cells
+    means_kmeans, variances_kmeans, cluster_proportions = initial_gaussians(
+        X,
+        weeks,
+        number_of_states,
+        number_of_weeks,
+        random_generator,
+    )
+    A_householder = householder_start(cluster_proportions[0], cluster_proportions[1])
+    starts = [("householder", cluster_proportions[0], A_householder, means_kmeans, variances_kmeans)]
+
+    # Step 2. Random starts: random pi, A and N different random cells as the means
+    for _ in range(number_of_random_starts):
+        pi_random, A_random = random_start(number_of_states, random_generator)
+        means_random = X[random_generator.choice(len(X), size=number_of_states, replace=False)]
+        variances_random = np.tile(X.var(axis=0), (number_of_states, 1))   # (N, d), every row the spread of all cells
+        starts.append(("random", pi_random, A_random, means_random, variances_random))
+
+    # Step 3. EM from every start
+    fits = []
+    for start, pi, A, means, variances in starts:
+        pi, A, means, variances, log_likelihoods = fit_population_model(
+            X,
+            weeks,
+            number_of_weeks,
+            pi,
+            A,
+            means,
+            variances,
+            max_iterations=max_iterations,
+        )
+        fits.append({
+            "start": start,
+            "pi": pi,
+            "A": A,
+            "means": means,
+            "variances": variances,
+            "log_likelihoods": log_likelihoods,
+        })
+
+    # Step 4. Best fit = highest final l
+    final_log_likelihoods = [fit["log_likelihoods"][-1] for fit in fits]
+    best_index = int(np.argmax(final_log_likelihoods))
+    return fits, best_index
